@@ -45,7 +45,9 @@
     "check": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
     "prepublishOnly": "npm run check && npm test",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "release:dry": "npm publish --dry-run --ignore-scripts=false",
+    "release": "npm publish --ignore-scripts=false"
   },
   "peerDependencies": {
     "fastify": "^5.0.0"
