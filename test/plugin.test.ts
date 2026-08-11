@@ -52,6 +52,8 @@ function signedRequest(
   extraHeaders: Record<string, string> = {},
   includePayloadHash = true,
   host = "example.test",
+  method = "POST",
+  path = "/protected?source=test",
 ): SignedRequest {
   const payloadHash = crypto.createHash("sha256").update(payload).digest("hex");
 
@@ -67,8 +69,8 @@ function signedRequest(
 
   const request: aws4.Request = {
     host,
-    method: "POST",
-    path: "/protected?source=test",
+    method,
+    path,
     body: payload,
     headers,
     doNotModifyHeaders: true,
@@ -242,7 +244,7 @@ test("returns custom unauthorized response body", async t => {
 //   assert.equal(response.statusCode, 401);
 // });
 
-test("fails clearly when the application does not provide a raw request body", async t => {
+test("captures the raw request body without fastify-raw-body", async t => {
   const app = Fastify();
 
   await app.register(fastifyAwsSigV4, {
@@ -252,7 +254,7 @@ test("fails clearly when the application does not provide a raw request body", a
     now: () => requestTime,
   });
 
-  app.post("/protected", { preValidation: app.verifyAwsSigV4 }, async () => ({ ok: true }));
+  app.post("/protected", { preValidation: app.verifyAwsSigV4 }, async request => ({ body: request.body }));
 
   t.after(() => app.close());
 
@@ -265,6 +267,95 @@ test("fails clearly when the application does not provide a raw request body", a
     payload: request.payload,
   });
 
-  assert.equal(response.statusCode, 500);
-  assert.deepEqual(response.json(), { message: "Internal Server Error" });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { body: { hello: "world" } });
+});
+
+test("rejects a DELETE body that was not included in the signature", async t => {
+  const app = Fastify();
+
+  await app.register(fastifyAwsSigV4, {
+    region: "eu-west-1",
+    service: "execute-api",
+    getCredentials: () => credentials,
+    now: () => requestTime,
+  });
+
+  app.delete("/protected", { preValidation: app.verifyAwsSigV4 }, async request => ({ body: request.body }));
+  t.after(() => app.close());
+
+  const unsignedBodyRequest: aws4.Request = {
+    host: "example.test",
+    method: "DELETE",
+    path: "/protected",
+    headers: {
+      Host: "example.test",
+      "Content-Type": "application/json",
+      "X-Amz-Date": requestTimeInAmzDate,
+    },
+    doNotModifyHeaders: true,
+    region: "eu-west-1",
+    service: "execute-api",
+  };
+  aws4.sign(unsignedBodyRequest, credentials);
+
+  const response = await app.inject({
+    method: "DELETE",
+    url: "/protected",
+    headers: unsignedBodyRequest.headers as Record<string, string>,
+    payload: '{"admin":true}',
+  });
+
+  assert.equal(response.statusCode, 401);
+});
+
+test("preserves Fastify body limits", async t => {
+  const app = Fastify({ bodyLimit: 8 });
+
+  await app.register(fastifyAwsSigV4, {
+    region: "eu-west-1",
+    service: "execute-api",
+    getCredentials: () => credentials,
+    now: () => requestTime,
+  });
+
+  app.post("/protected", { preValidation: app.verifyAwsSigV4 }, async () => ({ ok: true }));
+  t.after(() => app.close());
+
+  const request = signedRequest('{"hello":"world"}');
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 413);
+  assert.equal(response.json().code, "FST_ERR_CTP_BODY_TOO_LARGE");
+});
+
+test("does not interfere with fastify-raw-body", async t => {
+  const app = await createApp();
+  t.after(() => app.close());
+
+  app.post("/raw-body", {
+    config: { rawBody: true },
+    preValidation: app.verifyAwsSigV4,
+  }, async request => {
+    const rawBody = (request as typeof request & { rawBody?: unknown }).rawBody;
+    return { rawBody: Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : null };
+  });
+
+  const payload = '{"hello":"compatibility"}';
+  const request = signedRequest(payload, {}, true, "example.test", "POST", "/raw-body");
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { rawBody: payload });
 });

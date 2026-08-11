@@ -4,17 +4,17 @@ Fastify plugin that verifies AWS Signature Version 4 on requests.
 
 Use this to protect your API routes with battle-tested AWS signature algorithm. You can use your favorite tool such as Postman to generate and sign requests for your app. In fact, this module has been primarily created to sign and call private APIs from Postman.
 
-The only dependencies are [mhart's excellent aws4 module](https://github.com/mhart/aws4) and [fastify-raw-body](https://github.com/Eomm/fastify-raw-body) (although you can substitute the latter with your own implementation).
+The only runtime dependency is [mhart's excellent aws4 module](https://github.com/mhart/aws4).
 
 ## Install
 
 ```sh
-npm install fastify-raw-body fastify-aws-sig4-auth
+npm install fastify-aws-sig4-auth
 ```
 
 ## Usage
 
-### Protect only GET routes
+### Basic server-side syntax
 
 ```ts
 import Fastify from "fastify";
@@ -52,60 +52,7 @@ app.post(
 app.addHook("preHandler", instance.verifyAwsSigV4);
 ```
 
-### Protect routes with bodies (POST, PUT, PATCH)
-
-```ts
-import Fastify from "fastify";
-import fastifyRawBody from "fastify-raw-body";
-import fastifyAwsSigV4 from "fastify-aws-sig4-auth";
-
-const app = Fastify();
-
-// This is done according to fastify-raw-body documentation
-await app.register(fastifyRawBody, {
-  encoding: false,
-  global: false,
-  runFirst: true
-});
-
-await app.register(fastifyAwsSigV4, {
-  region: "ukraine-kiev",
-  service: "my-service",
-  async getCredentials(accessKeyId) {
-    // Actually query the database for your user
-    return {
-      accessKeyId,
-      secretAccessKey: 'secret-access-key'
-    };
-  },
-});
-
-// Now the fastify instance is ready to do the auth.
-
-// Example 1, handle a single route:
-app.post(
-  "/private",
-  {
-    // Again: this is according to fastify-raw-body docs
-    config: {
-      rawBody: true
-    },
-
-    preValidation: app.verifyAwsSigV4
-  },
-
-  async request => {
-    return { ok: true, body: request.body };
-  }
-);
-
-// Example 2, handle all routes:
-app.addHook("preHandler", instance.verifyAwsSigV4);
-```
-
-Register `fastify-raw-body` before defining protected routes, with `encoding: false` so `request.rawBody` is a `Buffer`. The `global: false` plus per-route `config.rawBody: true` setup avoids retaining duplicate body data for unprotected routes. `runFirst: true` captures bytes before another `preParsing` hook can alter them.
-
-If `request.rawBody` is absent or not a `Buffer`, this plugin returns `500 { "message": "Internal Server Error" }` and logs the configuration error. It does not silently verify an empty body.
+The plugin captures received bytes (raw body) for SigV4-authorized requests before Fastify parses the body. It is compatible with `fastify-raw-body`: if the application already uses it, its `request.rawBody` behavior is unchanged.
 
 ### Call a protected route with `fetch()`
 
@@ -134,13 +81,13 @@ const request = await client.sign("http://localhost:3000/private", {
   body
 });
 
+// Now send as usual:
 const response = await fetch(request);
 if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-
 console.log(await response.json());
 ```
 
-The body passed to `fetch()` must be exactly the body that was signed. Do not set or sign `Host` or `Content-Length`; `fetch()` manages them.
+The body passed to `fetch()` must be exactly the body that was signed, so absolutely do `JSON.stringify()` just once.
 
 ### CORS considerations
 

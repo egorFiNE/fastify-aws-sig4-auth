@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { Transform } from "node:stream";
 import aws4 from "aws4";
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -49,22 +50,19 @@ type ParsedAuthorization = {
 };
 
 type FastifyRequestWithRawBody = FastifyRequest & { rawBody?: unknown };
+type FastifyPayloadStream = Transform & { receivedEncodedLength: number };
 
 const DEFAULT_401_RESPONSE = { message: "Unauthorized" };
 const DEFAULT_MAX_CLOCK_SKEW_MS = 1 * 60 * 1000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
-const BODY_UNAVAILABLE_MESSAGE = "AWS SigV4 verification requires request.rawBody to be a Buffer; configure fastify-raw-body with encoding: false";
+const AWS4_AUTHORIZATION_PATTERN = /^AWS4-HMAC-SHA256\s/i;
+
+const capturedRawBodies = new WeakMap<FastifyRequest, Buffer>();
 
 function sendUnauthorized(request: FastifyRequest, reply: FastifyReply, reason: string, unauthorizedResponseBody: any) {
   request.log.debug({ reason }, "AWS SigV4 authentication failed");
   reply.code(401).send(unauthorizedResponseBody);
-}
-
-function sendRawBodyUnavailable(request: FastifyRequest, reply: FastifyReply) {
-  request.log.error(BODY_UNAVAILABLE_MESSAGE);
-  console.error(BODY_UNAVAILABLE_MESSAGE);
-  reply.code(500).send({ message: "Internal Server Error" });
 }
 
 function parseAuthorizationIntoAttributes(rawAuthorization: any): Map<string, string> | null {
@@ -160,7 +158,47 @@ function verifyPayloadHash(rawBody: Buffer, suppliedHash: string | undefined): b
   return safeEqual(actualHash, suppliedHash);
 }
 
-const METHODS_WITH_BODY = new Set([ "POST", "PUT", "PATCH", "DELETE" ]);
+function shouldCaptureRawBody(request: FastifyRequest): boolean {
+  const authorization = getHeader(request, "authorization");
+  return authorization !== undefined && AWS4_AUTHORIZATION_PATTERN.test(authorization);
+}
+
+function captureRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream): FastifyPayloadStream {
+  const chunks: Buffer[] = [];
+  const bodyLimit = request.routeOptions.bodyLimit;
+  let receivedLength = 0;
+
+  const capturedPayload = new Transform({
+    transform(chunk, encoding, callback) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+
+      receivedLength += buffer.length;
+      (this as FastifyPayloadStream).receivedEncodedLength += buffer.length;
+
+      if (receivedLength <= bodyLimit) chunks.push(buffer);
+      callback(null, chunk);
+    },
+
+    flush(callback) {
+      if (receivedLength <= bodyLimit) capturedRawBodies.set(request, Buffer.concat(chunks));
+      callback();
+    }
+  }) as FastifyPayloadStream;
+
+  capturedPayload.receivedEncodedLength = 0;
+
+  payload.pipe(capturedPayload);
+
+  return capturedPayload;
+}
+
+function getRawBody(request: FastifyRequest): Buffer | undefined {
+  const capturedRawBody = capturedRawBodies.get(request);
+  if (capturedRawBody !== undefined) return capturedRawBody;
+
+  const configuredRawBody = (request as FastifyRequestWithRawBody).rawBody;
+  return Buffer.isBuffer(configuredRawBody) ? configuredRawBody : undefined;
+}
 
 function createVerifier(options: AwsSigV4PluginOptions) {
   const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
@@ -170,11 +208,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
   if (!Number.isFinite(maxClockSkewMs) || maxClockSkewMs < 0) throw new Error("maxClockSkewMs must be a non-negative finite number");
 
   return async function verifyAwsSigV4(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    let rawBody = (request as FastifyRequestWithRawBody).rawBody;
-
-    if (rawBody && !Buffer.isBuffer(rawBody)) return sendRawBodyUnavailable(request, reply);
-
-    if (!rawBody && METHODS_WITH_BODY.has(request.method)) return sendRawBodyUnavailable(request, reply);
+    const rawBody = getRawBody(request);
 
     const authorization = getHeader(request, "authorization");
     if (!authorization) return sendUnauthorized(request, reply, "Authorization header is missing", unauthorizedResponseBody);
@@ -190,7 +224,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 
     if (rawBody) {
       const payloadHash = getHeader(request, "x-amz-content-sha256");
-      if (!verifyPayloadHash(rawBody as Buffer, payloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
+      if (!verifyPayloadHash(rawBody, payloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
     }
 
     const host = getHeader(request, "host");
@@ -221,7 +255,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       method: request.method,
       path: request.raw.url ?? request.url,
       headers,
-      body: rawBody as Buffer | string | undefined,
+      body: rawBody,
       // Recreate the signature from precisely the received signed headers.
       // fetch() manages Content-Length and browser callers cannot set it.
       doNotModifyHeaders: true,
@@ -247,6 +281,11 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 }
 
 const fastifyAwsSigV4: FastifyPluginAsync<AwsSigV4PluginOptions> = async (fastify, options) => {
+  fastify.addHook("preParsing", (request, reply, payload, done) => {
+    if (!shouldCaptureRawBody(request)) return done(null, payload);
+    done(null, captureRawBody(request, payload));
+  });
+
   fastify.decorate("verifyAwsSigV4", createVerifier(options));
 };
 
