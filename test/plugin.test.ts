@@ -152,7 +152,7 @@ test("rejects UNSIGNED-PAYLOAD by default", async t => {
   const app = await createApp();
   t.after(() => app.close());
 
-  const request = signedRequest('{"hello":"world"}', {
+  const request = signedRequest('{}', {
     "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
   });
 
