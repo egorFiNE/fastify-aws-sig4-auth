@@ -118,11 +118,10 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
   return { accessKeyId, date, region, service, signedHeaderNames, signature };
 }
 
-// FIXME simpler?
 function parseAmzDate(value: string | null | undefined): number | null {
   if (!value) return null;
 
-  const match = value.match(AMZ_DATE_PATTERN);
+  const match = AMZ_DATE_PATTERN.exec(value);
   if (!match) return null;
 
   const [, year, month, day, hour, minute, second] = match;
@@ -136,7 +135,7 @@ function parseAmzDate(value: string | null | undefined): number | null {
   );
 
   const normalizedDate = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === normalizedDate ? timestamp : null;
+  return new Date(timestamp).toISOString() === normalizedDate ? timestamp : null;
 }
 
 // defensive code, yeah.
