@@ -160,6 +160,8 @@ function verifyPayloadHash(rawBody: Buffer, suppliedHash: string | undefined): b
   return safeEqual(actualHash, suppliedHash);
 }
 
+const METHODS_WITH_BODY = new Set([ "POST", "PUT", "PATCH", "DELETE" ]);
+
 function createVerifier(options: AwsSigV4PluginOptions) {
   const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
   const now = options.now ?? (() => new Date());
@@ -172,7 +174,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 
     if (rawBody && !Buffer.isBuffer(rawBody)) return sendRawBodyUnavailable(request, reply);
 
-    if (!rawBody && (request.method === "POST" || request.method === "PUT" || request.method === "PATCH")) return sendRawBodyUnavailable(request, reply);
+    if (!rawBody && METHODS_WITH_BODY.has(request.method)) return sendRawBodyUnavailable(request, reply);
 
     const authorization = getHeader(request, "authorization");
     if (!authorization) return sendUnauthorized(request, reply, "Authorization header is missing", unauthorizedResponseBody);
