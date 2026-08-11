@@ -36,6 +36,9 @@ await app.register(fastifyAwsSigV4, {
       accessKeyId,
       secretAccessKey: 'secret-access-key'
     };
+
+    // In case the user is unknown:
+    // return null;
   },
 });
 
