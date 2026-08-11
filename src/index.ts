@@ -27,7 +27,7 @@ export type AwsSigV4PluginOptions = {
 
   /** Provides the current time. For tests only. */
   now?: () => Date;
-}
+};
 
 export type AwsSigV4Credentials = {
   accessKeyId: string;
@@ -42,7 +42,7 @@ declare module "fastify" {
   interface FastifyRequest {
     accessKeyId: string | null;
   }
-};
+}
 
 type ParsedAuthorization = {
   accessKeyId: string;
@@ -69,13 +69,13 @@ function sendUnauthorized(request: FastifyRequest, reply: FastifyReply, reason: 
   reply.code(401).send(unauthorizedResponseBody);
 }
 
-function parseAuthorizationIntoAttributes(rawAuthorization: any): Map<string, string> | null {
-  if (!rawAuthorization) return null;
+function parseAuthorizationIntoAttributes(authorization: any): Map<string, string> | null {
+  if (!authorization) return null;
 
   // because OutgoingHttpHeader can be supplied here, so we want to make sure we have a string, not an array or something else
-  if (typeof rawAuthorization !== "string") return null;
+  if (typeof authorization !== "string") return null;
 
-  const authorization = rawAuthorization as string;
+  // `authorization` is considered to be a string at this point.
 
   const match = authorization.match(/^AWS4-HMAC-SHA256\s+(.+)$/i);
   if (!match) return null;
@@ -112,7 +112,7 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
   if (!accessKeyId || !/^\d{8}$/.test(date) || !region || !service) return null;
 
   const signedHeaderNames = signedHeaders.split(";");
-  if (signedHeaderNames.length === 0 || signedHeaderNames.some((name) => !/^[a-z0-9-]+$/.test(name))) return null;
+  if (signedHeaderNames.length === 0 || signedHeaderNames.some(name => !/^[a-z0-9-]+$/.test(name))) return null;
 
   // We care about the duplicate headers, because those can only be nefarious
   if (new Set(signedHeaderNames).size !== signedHeaderNames.length) return null;
@@ -126,14 +126,14 @@ function parseAmzDate(value: string | null | undefined): number | null {
   const match = AMZ_DATE_PATTERN.exec(value);
   if (!match) return null;
 
-  const [, year, month, day, hour, minute, second] = match;
+  const [ , year, month, day, hour, minute, second ] = match;
   const timestamp = Date.UTC(
     Number(year),
     Number(month) - 1,
     Number(day),
     Number(hour),
     Number(minute),
-    Number(second),
+    Number(second)
   );
 
   const normalizedDate = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
@@ -253,13 +253,15 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       credentials = await options.getCredentials(parsed.accessKeyId, request);
     } catch (error) {
       request.log.error({ error }, "AWS SigV4 credential lookup failed");
-      reply.code(500).send({ message: "Internal Server Error" });
-      return;
+      return await reply.code(500).send({ message: "Internal Server Error" });
     }
 
     if (!credentials || credentials.accessKeyId !== parsed.accessKeyId) return sendUnauthorized(request, reply, "Access key is unknown", unauthorizedResponseBody);
 
-    // if (credentials.sessionToken && getHeader(request, "x-amz-security-token") !== credentials.sessionToken) return sendUnauthorized(request, reply, "Session token does not match");
+    // sessionToken wip?
+    // if (credentials.sessionToken && getHeader(request, "x-amz-security-token") !== credentials.sessionToken) {
+    //   return sendUnauthorized(request, reply, "Session token does not match");
+    // }
 
     const signOptions: aws4.Request = {
       host,
@@ -286,11 +288,15 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     const expected = parseAuthorization(generatedAuthorization);
 
     if (!expected) return sendUnauthorized(request, reply, "Did not parse Authorization header", unauthorizedResponseBody);
-    if (expected.signedHeaderNames.join(";") !== parsed.signedHeaderNames.join(";")) return sendUnauthorized(request, reply, "Signature headers list does not match", unauthorizedResponseBody);
+    if (expected.signedHeaderNames.join(";") !== parsed.signedHeaderNames.join(";")) {
+      return sendUnauthorized(request, reply, "Signature headers list does not match", unauthorizedResponseBody);
+    }
     if (!safeEqual(parsed.signature, expected.signature)) return sendUnauthorized(request, reply, "Signature does not match", unauthorizedResponseBody);
 
     // All okay at this point, auth passed
     request.accessKeyId = credentials.accessKeyId;
+
+    return undefined; // make eslint happy
   };
 }
 
@@ -306,5 +312,5 @@ const fastifyAwsSigV4: FastifyPluginAsync<AwsSigV4PluginOptions> = async (fastif
 
 export default fp(fastifyAwsSigV4, {
   fastify: "5.x",
-  name: "fastify-aws-sig4-auth",
+  name: "fastify-aws-sig4-auth"
 });
