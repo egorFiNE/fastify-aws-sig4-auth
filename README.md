@@ -58,7 +58,7 @@ app.post(
 );
 
 // Example 2, handle all routes:
-app.addHook("preHandler", instance.verifyAwsSigV4);
+app.addHook("preHandler", app.verifyAwsSigV4);
 ```
 
 The plugin captures received bytes (raw body) for SigV4-authorized requests before Fastify parses the body. It is compatible with `fastify-raw-body`: if the application already uses it, its `request.rawBody` behavior is unchanged.
