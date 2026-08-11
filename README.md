@@ -2,7 +2,9 @@
 
 Fastify plugin that verifies AWS Signature Version 4 on requests.
 
-Use this to protect your API routes with battle-tested AWS signature algorithm. You can use your favorite tool such as Postman to generate and sign requests for your app. In fact, this module has been primarily created to sign and call private APIs from Postman.
+Use this to protect your API routes with the battle-tested and widely supported AWS signature algorithm.
+
+You can use your favorite tool such as Postman to send signed requests for your app. In fact, this module has been primarily created to sign and call private APIs from Postman.
 
 The only runtime dependency is [mhart's excellent aws4 module](https://github.com/mhart/aws4).
 
@@ -23,8 +25,11 @@ import fastifyAwsSigV4 from "fastify-aws-sig4-auth";
 const app = Fastify();
 
 await app.register(fastifyAwsSigV4, {
+  // Any string value will do, but you will have to supply the same
+  // values to craft valid signature.
   region: "ukraine-kiev",
   service: "my-service",
+
   async getCredentials(accessKeyId) {
     // Actually query the database for your user
     return {
@@ -124,7 +129,7 @@ Protected requests must use `AWS4-HMAC-SHA256` and include:
 
 The plugin responds with `401 { "message": "Unauthorized" }` for invalid signatures, unknown keys, invalid payload hashes, malformed headers, and timestamps outside the configured skew. Credential-lookup failures produce `500` and are logged.
 
-`UNSIGNED-PAYLOAD` is intentionally rejected unless `allowUnsignedPayload` is enabled. AWS streaming payload signatures (`STREAMING-AWS4-HMAC-SHA256-*`) are not supported.
+`UNSIGNED-PAYLOAD` intentionally rejected. AWS streaming payload signatures (`STREAMING-AWS4-HMAC-SHA256-*`) are not supported.
 
 ## Development
 
