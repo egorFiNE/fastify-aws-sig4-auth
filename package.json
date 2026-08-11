@@ -10,6 +10,11 @@
     "authentication"
   ],
   "homepage": "https://github.com/egorFiNE/fastify-aws-sig4-auth",
+  "author": {
+    "name": "Egor Egorov",
+    "email": "me@egorfine.com",
+    "url": "https://egorfine.com/en/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/egorFiNE/fastify-aws-sig4-auth.git"
