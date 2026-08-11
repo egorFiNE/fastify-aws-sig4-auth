@@ -47,10 +47,13 @@ type SignedRequest = {
   url: string;
 };
 
-function signedRequest(payload: string, extraHeaders: Record<string, string> = {}, includePayloadHash = true): SignedRequest {
+function signedRequest(
+  payload: string,
+  extraHeaders: Record<string, string> = {},
+  includePayloadHash = true,
+  host = "example.test",
+): SignedRequest {
   const payloadHash = crypto.createHash("sha256").update(payload).digest("hex");
-
-  const host = "example.test";
 
   const headers: Record<string, string> = {
     Host: host,
@@ -68,6 +71,7 @@ function signedRequest(payload: string, extraHeaders: Record<string, string> = {
     path: "/protected?source=test",
     body: payload,
     headers,
+    doNotModifyHeaders: true,
     region: "eu-west-1",
     service: "execute-api",
   };
@@ -96,6 +100,28 @@ test("accepts a correctly signed request and preserves its parsed payload", asyn
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), { body: { hello: "world" } });
+});
+
+test("accepts a signed request with a body sent through fetch over HTTP", async t => {
+  const app = await createApp();
+  t.after(() => app.close());
+
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const host = new URL(address).host;
+  const request = signedRequest('{"hello":"fetch"}', {}, true, host);
+
+  // fetch supplies these transport-managed headers itself. They must not be signed.
+  delete request.headers.Host;
+  delete request.headers["Content-Length"];
+
+  const response = await fetch(`${address}${request.url}`, {
+    method: "POST",
+    headers: request.headers,
+    body: request.payload,
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { body: { hello: "fetch" } });
 });
 
 test("rejects a body that differs from the signed payload", async t => {
@@ -164,6 +190,38 @@ test("rejects UNSIGNED-PAYLOAD by default", async t => {
   });
 
   assert.equal(response.statusCode, 401);
+});
+
+test("returns custom unauthorized response body", async t => {
+  const app = Fastify();
+
+  const customUnauthorizedResponseBody = { message: "Custom Unauthorized" };
+
+  await app.register(fastifyAwsSigV4, {
+    region: "eu-west-1",
+    service: "execute-api",
+    getCredentials: () => credentials,
+    now: () => requestTime,
+    unauthorizedResponseBody: customUnauthorizedResponseBody
+  });
+
+  app.get("/protected", { preValidation: app.verifyAwsSigV4 }, async () => ({ ok: true }));
+
+  t.after(() => app.close());
+
+  const request = signedRequest('{}', {
+    "X-Amz-Content-Sha256": "wrong",
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(response.json(), customUnauthorizedResponseBody);
 });
 
 // test("requires the configured session token for temporary credentials", async t => {

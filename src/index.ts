@@ -22,6 +22,8 @@ export type AwsSigV4PluginOptions = {
   /** Maximum permitted difference between X-Amz-Date and the current time. */
   maxClockSkewMs?: number;
 
+  unauthorizedResponseBody?: any;
+
   /** Provides the current time. For tests only. */
   now?: () => Date;
 }
@@ -48,15 +50,15 @@ type ParsedAuthorization = {
 
 type FastifyRequestWithRawBody = FastifyRequest & { rawBody?: unknown };
 
+const DEFAULT_401_RESPONSE = { message: "Unauthorized" };
 const DEFAULT_MAX_CLOCK_SKEW_MS = 1 * 60 * 1000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
 const BODY_UNAVAILABLE_MESSAGE = "AWS SigV4 verification requires request.rawBody to be a Buffer; configure fastify-raw-body with encoding: false";
 
-// FIXME make custom response for 401
-function sendUnauthorized(request: FastifyRequest, reply: FastifyReply, reason: string) {
+function sendUnauthorized(request: FastifyRequest, reply: FastifyReply, reason: string, unauthorizedResponseBody: any) {
   request.log.debug({ reason }, "AWS SigV4 authentication failed");
-  reply.code(401).send({ message: "Unauthorized" });
+  reply.code(401).send(unauthorizedResponseBody);
 }
 
 function sendRawBodyUnavailable(request: FastifyRequest, reply: FastifyReply) {
@@ -65,7 +67,7 @@ function sendRawBodyUnavailable(request: FastifyRequest, reply: FastifyReply) {
   reply.code(500).send({ message: "Internal Server Error" });
 }
 
-function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
+function parseAuthorizationIntoAttributes(rawAuthorization: any): Map<string, string> | null {
   if (!rawAuthorization) return null;
 
   // because OutgoingHttpHeader can be supplied here, so we want to make sure we have a string, not an array or something else
@@ -76,7 +78,6 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
   const match = authorization.match(/^AWS4-HMAC-SHA256\s+(.+)$/i);
   if (!match) return null;
 
-  // FIXME extract this piece
   const attributes = new Map<string, string>();
   for (const part of match[1].split(",")) {
     const separatorIndex = part.indexOf("=");
@@ -84,10 +85,18 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
 
     const key = part.slice(0, separatorIndex).trim();
     const value = part.slice(separatorIndex + 1).trim();
+
     if (!key || !value || attributes.has(key)) return null;
 
     attributes.set(key, value);
   }
+
+  return attributes;
+}
+
+function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
+  const attributes = parseAuthorizationIntoAttributes(rawAuthorization);
+  if (attributes === null) return null;
 
   const credential = attributes.get("Credential");
   const signedHeaders = attributes.get("SignedHeaders");
@@ -103,7 +112,7 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
   const signedHeaderNames = signedHeaders.split(";");
   if (signedHeaderNames.length === 0 || signedHeaderNames.some((name) => !/^[a-z0-9-]+$/.test(name))) return null;
 
-  // FIXME this code makes sure that the signedHeaderNames are unique, but why would we care?
+  // This code makes sure that the signedHeaderNames are unique, but why would we care?
   // new Set(signedHeaderNames).size !== signedHeaderNames.length
 
   return { accessKeyId, date, region, service, signedHeaderNames, signature };
@@ -155,38 +164,43 @@ function verifyPayloadHash(rawBody: Buffer, suppliedHash: string | undefined): b
 function createVerifier(options: AwsSigV4PluginOptions) {
   const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
   const now = options.now ?? (() => new Date());
+  const unauthorizedResponseBody = options.unauthorizedResponseBody ?? DEFAULT_401_RESPONSE;
 
   if (!Number.isFinite(maxClockSkewMs) || maxClockSkewMs < 0) throw new Error("maxClockSkewMs must be a non-negative finite number");
 
   return async function verifyAwsSigV4(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const rawBody = (request as FastifyRequestWithRawBody).rawBody;
-    if (!Buffer.isBuffer(rawBody)) return sendRawBodyUnavailable(request, reply);
+    let rawBody = (request as FastifyRequestWithRawBody).rawBody;
+
+    if (rawBody && !Buffer.isBuffer(rawBody)) return sendRawBodyUnavailable(request, reply);
+
+    if (!rawBody && (request.method === "POST" || request.method === "PUT" || request.method === "PATCH")) return sendRawBodyUnavailable(request, reply);
 
     const authorization = getHeader(request, "authorization");
-    if (!authorization) return sendUnauthorized(request, reply, "Authorization header is missing");
+    if (!authorization) return sendUnauthorized(request, reply, "Authorization header is missing", unauthorizedResponseBody);
 
     const parsed = parseAuthorization(authorization);
-    if (!parsed) return sendUnauthorized(request, reply, "Authorization header is invalid");
-    if (parsed.region !== options.region || parsed.service !== options.service) return sendUnauthorized(request, reply, "Credential scope does not match this verifier");
+    if (!parsed) return sendUnauthorized(request, reply, "Authorization header is invalid", unauthorizedResponseBody);
+    if (parsed.region !== options.region || parsed.service !== options.service) return sendUnauthorized(request, reply, "Credential scope does not match this verifier", unauthorizedResponseBody);
 
     const amzDate = getHeader(request, "x-amz-date");
     const timestamp = parseAmzDate(amzDate);
-    if (timestamp === null) return sendUnauthorized(request, reply, "X-Amz-Date is invalid");
-    if (Math.abs(now().getTime() - timestamp) > maxClockSkewMs) return sendUnauthorized(request, reply, "X-Amz-Date is outside the allowed clock skew");
+    if (timestamp === null) return sendUnauthorized(request, reply, "X-Amz-Date is invalid", unauthorizedResponseBody);
+    if (Math.abs(now().getTime() - timestamp) > maxClockSkewMs) return sendUnauthorized(request, reply, "X-Amz-Date is outside the allowed clock skew", unauthorizedResponseBody);
 
-    const payloadHash = getHeader(request, "x-amz-content-sha256");
-    if (!verifyPayloadHash(rawBody, payloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match");
+    if (rawBody) {
+      const payloadHash = getHeader(request, "x-amz-content-sha256");
+      if (!verifyPayloadHash(rawBody as Buffer, payloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
+    }
 
-    // FIXME extract code
+    const host = getHeader(request, "host");
+    if (!host) return sendUnauthorized(request, reply, "Host header is missing", unauthorizedResponseBody);
+
     const headers: Record<string, string> = {};
     for (const name of parsed.signedHeaderNames) {
       const value = getHeader(request, name);
-      if (value === undefined) return sendUnauthorized(request, reply, `Signed header is missing: ${name}`);
+      if (value === undefined) return sendUnauthorized(request, reply, `Signed header is missing: ${name}`, unauthorizedResponseBody);
       headers[name] = value;
     }
-
-    const host = headers.host;
-    if (!host) return sendUnauthorized(request, reply, "Host header is missing");
 
     let credentials: AwsSigV4Credentials | null;
     try {
@@ -197,7 +211,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       return;
     }
 
-    if (!credentials || credentials.accessKeyId !== parsed.accessKeyId) return sendUnauthorized(request, reply, "Access key is unknown");
+    if (!credentials || credentials.accessKeyId !== parsed.accessKeyId) return sendUnauthorized(request, reply, "Access key is unknown", unauthorizedResponseBody);
 
     // if (credentials.sessionToken && getHeader(request, "x-amz-security-token") !== credentials.sessionToken) return sendUnauthorized(request, reply, "Session token does not match");
 
@@ -206,9 +220,12 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       method: request.method,
       path: request.raw.url ?? request.url,
       headers,
-      body: rawBody,
+      body: rawBody as Buffer | string | undefined,
+      // Recreate the signature from precisely the received signed headers.
+      // fetch() manages Content-Length and browser callers cannot set it.
+      doNotModifyHeaders: true,
       region: options.region,
-      service: options.service,
+      service: options.service
     };
 
     aws4.sign(signOptions, {
@@ -220,9 +237,9 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     const generatedAuthorization = signOptions.headers?.Authorization ?? signOptions.headers?.authorization;
     const expected = parseAuthorization(generatedAuthorization);
 
-    if (!expected) return sendUnauthorized(request, reply, "Did not parse Authorization header");
-    if (expected.signedHeaderNames.join(";") !== parsed.signedHeaderNames.join(";")) return sendUnauthorized(request, reply, "Signature headers list does not match");
-    if (!safeEqual(parsed.signature, expected.signature)) return sendUnauthorized(request, reply, "Signature does not match");
+    if (!expected) return sendUnauthorized(request, reply, "Did not parse Authorization header", unauthorizedResponseBody);
+    if (expected.signedHeaderNames.join(";") !== parsed.signedHeaderNames.join(";")) return sendUnauthorized(request, reply, "Signature headers list does not match", unauthorizedResponseBody);
+    if (!safeEqual(parsed.signature, expected.signature)) return sendUnauthorized(request, reply, "Signature does not match", unauthorizedResponseBody);
 
     // all okay at this point
   };
