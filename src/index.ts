@@ -114,8 +114,8 @@ function parseAuthorization(rawAuthorization: any): ParsedAuthorization | null {
   const signedHeaderNames = signedHeaders.split(";");
   if (signedHeaderNames.length === 0 || signedHeaderNames.some((name) => !/^[a-z0-9-]+$/.test(name))) return null;
 
-  // This code makes sure that the signedHeaderNames are unique, but why would we care?
-  // new Set(signedHeaderNames).size !== signedHeaderNames.length
+  // We care about the duplicate headers, because those can only be nefarious
+  if (new Set(signedHeaderNames).size !== signedHeaderNames.length) return null;
 
   return { accessKeyId, date, region, service, signedHeaderNames, signature };
 }
