@@ -103,7 +103,7 @@ The body passed to `fetch()` must be exactly the body that was signed, so absolu
 
 ### CORS considerations
 
-Configure CORS to allow `Authorization`, `Content-Type`, and `X-Amz-Date` when calling a different origin. Use `@fastify/cors`.
+Configure CORS to allow `Authorization`, `Content-Type`, `X-Amz-Date` and `X-Amz-Content-Sha256` when calling a different origin. Use `@fastify/cors`.
 
 ## Options
 
