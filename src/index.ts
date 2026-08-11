@@ -38,6 +38,10 @@ declare module "fastify" {
   interface FastifyInstance {
     verifyAwsSigV4: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
+
+  interface FastifyRequest {
+    accessKeyId: string | null;
+  }
 };
 
 type ParsedAuthorization = {
@@ -276,7 +280,8 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     if (expected.signedHeaderNames.join(";") !== parsed.signedHeaderNames.join(";")) return sendUnauthorized(request, reply, "Signature headers list does not match", unauthorizedResponseBody);
     if (!safeEqual(parsed.signature, expected.signature)) return sendUnauthorized(request, reply, "Signature does not match", unauthorizedResponseBody);
 
-    // all okay at this point
+    // All okay at this point, auth passed
+    request.accessKeyId = credentials.accessKeyId;
   };
 }
 
@@ -286,6 +291,7 @@ const fastifyAwsSigV4: FastifyPluginAsync<AwsSigV4PluginOptions> = async (fastif
     done(null, captureRawBody(request, payload));
   });
 
+  fastify.decorateRequest("accessKeyId", null);
   fastify.decorate("verifyAwsSigV4", createVerifier(options));
 };
 

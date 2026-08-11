@@ -44,7 +44,11 @@ app.post(
   },
 
   async request => {
-    return { ok: true, body: request.body };
+    console.log(`Successfully authenticated with ${request.accessKeyId}`);
+
+    return {
+      ok: true
+    };
   }
 );
 
@@ -104,6 +108,10 @@ Configure CORS to allow `Authorization`, `Content-Type`, and `X-Amz-Date` when c
 | `unauthorizedResponseBody` | No | What should we `reply.send()` in case we are serving a `401` response. Default: `{ message: "Unauthorized" }` |
 
 Temporary AWS credentials are deliberately not supported.
+
+## `request` properties
+
+`request.accessKeyId` is populated in case of successful authentication.
 
 ## Request requirements
 

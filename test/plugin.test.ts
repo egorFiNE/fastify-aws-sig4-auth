@@ -104,6 +104,25 @@ test("accepts a correctly signed request and preserves its parsed payload", asyn
   assert.deepEqual(response.json(), { body: { hello: "world" } });
 });
 
+test("sets request.accessKeyId after successful signature verification", async t => {
+  const app = await createApp();
+  t.after(() => app.close());
+
+  app.get("/identity", { preValidation: app.verifyAwsSigV4 }, async request => ({
+    accessKeyId: request.accessKeyId,
+  }));
+
+  const request = signedRequest("", {}, true, "example.test", "GET", "/identity");
+  const response = await app.inject({
+    method: "GET",
+    url: request.url,
+    headers: request.headers,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { accessKeyId: credentials.accessKeyId });
+});
+
 test("accepts a signed request with a body sent through fetch over HTTP", async t => {
   const app = await createApp();
   t.after(() => app.close());
