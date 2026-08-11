@@ -144,3 +144,11 @@ npm run build
 ```
 
 The package is ESM-only.
+
+### eslint
+
+You will need to install `eslint-config-airbnb-extended`, then force install `typescript@6`, `@eslint/js` and `eslint@latest`. Then run:
+
+```sh
+npx eslint src
+```
