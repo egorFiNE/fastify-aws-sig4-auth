@@ -78,7 +78,9 @@ function signedRequest(
     service: "execute-api",
   };
 
-  aws4.sign(request, credentials);
+  const signer = new aws4.RequestSigner(request, credentials);
+  signer.datetime = requestTimeInAmzDate;
+  signer.sign();
 
   return {
     headers: request.headers as Record<string, string>,
@@ -102,6 +104,43 @@ test("accepts a correctly signed request and preserves its parsed payload", asyn
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), { body: { hello: "world" } });
+});
+
+test("accepts a valid request within the allowed clock skew", async t => {
+  const app = await createApp({
+    now: () => new Date("1991-08-24T12:00:30.000Z"),
+  });
+  t.after(() => app.close());
+
+  const request = signedRequest('{"hello":"world"}');
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 200);
+});
+
+test("rejects a credential scope date that differs from X-Amz-Date", async t => {
+  const app = await createApp();
+  t.after(() => app.close());
+
+  const request = signedRequest('{"hello":"world"}');
+  request.headers.Authorization = request.headers.Authorization.replace(
+    "/19910824/eu-west-1/execute-api/aws4_request",
+    "/19910825/eu-west-1/execute-api/aws4_request",
+  );
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 401);
 });
 
 test("sets request.accessKeyId after successful signature verification", async t => {

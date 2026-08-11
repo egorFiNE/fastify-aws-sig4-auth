@@ -219,12 +219,19 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 
     const parsed = parseAuthorization(authorization);
     if (!parsed) return sendUnauthorized(request, reply, "Authorization header is invalid", unauthorizedResponseBody);
-    if (parsed.region !== options.region || parsed.service !== options.service) return sendUnauthorized(request, reply, "Credential scope does not match this verifier", unauthorizedResponseBody);
+    if (parsed.region !== options.region || parsed.service !== options.service) {
+      return sendUnauthorized(request, reply, "Credential scope does not match this verifier", unauthorizedResponseBody);
+    }
 
     const amzDate = getHeader(request, "x-amz-date");
     const timestamp = parseAmzDate(amzDate);
-    if (timestamp === null) return sendUnauthorized(request, reply, "X-Amz-Date is invalid", unauthorizedResponseBody);
+    if (timestamp === null || amzDate === undefined) return sendUnauthorized(request, reply, "X-Amz-Date is invalid", unauthorizedResponseBody);
+    if (parsed.date !== amzDate.slice(0, 8)) return sendUnauthorized(request, reply, "Credential date does not match X-Amz-Date", unauthorizedResponseBody);
     if (Math.abs(now().getTime() - timestamp) > maxClockSkewMs) return sendUnauthorized(request, reply, "X-Amz-Date is outside the allowed clock skew", unauthorizedResponseBody);
+
+    if (!parsed.signedHeaderNames.includes("host") || !parsed.signedHeaderNames.includes("x-amz-date")) {
+      return sendUnauthorized(request, reply, "Required headers are not signed", unauthorizedResponseBody);
+    }
 
     if (rawBody) {
       const payloadHash = getHeader(request, "x-amz-content-sha256");
@@ -267,11 +274,13 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       service: options.service
     };
 
-    aws4.sign(signOptions, {
+    const signer = new aws4.RequestSigner(signOptions, {
       accessKeyId: credentials.accessKeyId,
       secretAccessKey: credentials.secretAccessKey
       // sessionToken: credentials.sessionToken,
     });
+    signer.datetime = amzDate;
+    signer.sign();
 
     const generatedAuthorization = signOptions.headers?.Authorization ?? signOptions.headers?.authorization;
     const expected = parseAuthorization(generatedAuthorization);
