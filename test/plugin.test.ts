@@ -284,6 +284,24 @@ test("returns custom unauthorized response body", async t => {
   assert.deepEqual(response.json(), customUnauthorizedResponseBody);
 });
 
+test("rejects unsupported temporary credentials", async t => {
+  const sessionCredentials = { ...credentials, sessionToken: "temporary-session-token" };
+  const app = await createApp({
+    getCredentials: () => sessionCredentials,
+  });
+  t.after(() => app.close());
+  const request = signedRequest('{"hello":"world"}');
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 401);
+});
+
 // test("requires the configured session token for temporary credentials", async t => {
 //   const sessionCredentials = { ...credentials, sessionToken: "temporary-session-token" };
 //   const app = await createApp({

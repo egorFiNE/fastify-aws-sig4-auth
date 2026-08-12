@@ -263,6 +263,9 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     //   return sendUnauthorized(request, reply, "Session token does not match");
     // }
 
+    // sessionToken tmp disabled
+    if ("sessionToken" in credentials) return sendUnauthorized(request, reply, "Temporary credentials are not supported", unauthorizedResponseBody);
+
     const signOptions: aws4.Request = {
       host,
       method: request.method,
