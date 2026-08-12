@@ -23,6 +23,7 @@ export type AwsSigV4PluginOptions = {
   /** Maximum permitted difference between X-Amz-Date and the current time. */
   maxClockSkewMs?: number;
 
+  /** Response body to send when the request is unauthorized. */
   unauthorizedResponseBody?: any;
 
   /** Provides the current time. For tests only. */
@@ -60,7 +61,7 @@ const DEFAULT_401_RESPONSE = { message: "Unauthorized" };
 const DEFAULT_MAX_CLOCK_SKEW_MS = 1 * 60 * 1000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
-const AWS4_AUTHORIZATION_PATTERN = /^AWS4-HMAC-SHA256\s/i;
+const AMZ_HMAC_PATTERN = /^AWS4-HMAC-SHA256\s+(.+)$/i;
 
 const capturedRawBodies = new WeakMap<FastifyRequest, Buffer>();
 
@@ -77,7 +78,7 @@ function parseAuthorizationIntoAttributes(authorization: any): Map<string, strin
 
   // `authorization` is considered to be a string at this point.
 
-  const match = authorization.match(/^AWS4-HMAC-SHA256\s+(.+)$/i);
+  const match = AMZ_HMAC_PATTERN.exec(authorization);
   if (!match) return null;
 
   const attributes = new Map<string, string>();
@@ -164,7 +165,7 @@ function verifyPayloadHash(rawBody: Buffer, suppliedHash: string | undefined): b
 
 function shouldCaptureRawBody(request: FastifyRequest): boolean {
   const authorization = getHeader(request, "authorization");
-  return authorization !== undefined && AWS4_AUTHORIZATION_PATTERN.test(authorization);
+  return Boolean(parseAuthorization(authorization));
 }
 
 function captureRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream): FastifyPayloadStream {
