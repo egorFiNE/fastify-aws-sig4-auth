@@ -219,6 +219,44 @@ test("rejects a request without X-Amz-Content-Sha256 in case body is not capture
   assert.equal(response.statusCode, 401);
 });
 
+test("rejects an unsigned X-Amz-Content-Sha256 when raw bodies are not captured", async t => {
+  const app = await createApp({ skipCaptureRawBody: true });
+  t.after(() => app.close());
+
+  const request = signedRequest("", {}, false);
+  request.payload = '{"admin":true}';
+  request.headers["X-Amz-Content-Sha256"] = crypto.createHash("sha256").update(request.payload).digest("hex");
+
+  assert.doesNotMatch(request.headers.Authorization, /x-amz-content-sha256/);
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 401);
+});
+
+test("accepts a signed X-Amz-Content-Sha256 when raw bodies are not captured", async t => {
+  const app = await createApp({ skipCaptureRawBody: true });
+  t.after(() => app.close());
+
+  const request = signedRequest('{"hello":"world"}');
+
+  assert.match(request.headers.Authorization, /x-amz-content-sha256/);
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 200);
+});
+
 test("verifies a request without X-Amz-Content-Sha256 when capturing raw bodies", async t => {
   const app = await createApp({ skipCaptureRawBody: false });
   t.after(() => app.close());

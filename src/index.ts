@@ -230,7 +230,11 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     if (parsed.date !== amzDate.slice(0, 8)) return sendUnauthorized(request, reply, "Credential date does not match X-Amz-Date", unauthorizedResponseBody);
     if (Math.abs(now().getTime() - timestamp) > maxClockSkewMs) return sendUnauthorized(request, reply, "X-Amz-Date is outside the allowed clock skew", unauthorizedResponseBody);
 
-    if (!parsed.signedHeaderNames.includes("host") || !parsed.signedHeaderNames.includes("x-amz-date")) {
+    if (
+      !parsed.signedHeaderNames.includes("host") ||
+      !parsed.signedHeaderNames.includes("x-amz-date") ||
+      (skipCaptureRawBody && !parsed.signedHeaderNames.includes("x-amz-content-sha256"))
+    ) {
       return sendUnauthorized(request, reply, "Required headers are not signed", unauthorizedResponseBody);
     }
 
