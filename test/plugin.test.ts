@@ -201,8 +201,26 @@ test("rejects a body that differs from the signed payload", async t => {
   assert.deepEqual(response.json(), { message: "Unauthorized" });
 });
 
-test("verifies a request without X-Amz-Content-Sha256", async t => {
-  const app = await createApp();
+test("rejects a request without X-Amz-Content-Sha256 in case body is not captured", async t => {
+  const app = await createApp({
+    skipCaptureRawBody: true
+  });
+  t.after(() => app.close());
+
+  const request = signedRequest('{"hello":"world"}', {}, false);
+
+  const response = await app.inject({
+    method: "POST",
+    url: request.url,
+    headers: request.headers,
+    payload: request.payload,
+  });
+
+  assert.equal(response.statusCode, 401);
+});
+
+test("verifies a request without X-Amz-Content-Sha256 when capturing raw bodies", async t => {
+  const app = await createApp({ skipCaptureRawBody: false });
   t.after(() => app.close());
 
   const request = signedRequest('{"hello":"world"}', {}, false);
@@ -320,7 +338,7 @@ test("rejects unsupported temporary credentials", async t => {
 //   assert.equal(response.statusCode, 401);
 // });
 
-test("captures the raw request body without fastify-raw-body", async t => {
+test("does not retain the raw request body without fastify-raw-body", async t => {
   const app = Fastify();
 
   await app.register(fastifyAwsSigV4, {
@@ -330,7 +348,13 @@ test("captures the raw request body without fastify-raw-body", async t => {
     now: () => requestTime,
   });
 
-  app.post("/protected", { preValidation: app.verifyAwsSigV4 }, async request => ({ body: request.body }));
+  app.post("/protected", { preValidation: app.verifyAwsSigV4 }, async request => {
+    const rawBody = (request as typeof request & { rawBody?: unknown }).rawBody;
+    return {
+      body: request.body,
+      rawBody: Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : null,
+    };
+  });
 
   t.after(() => app.close());
 
@@ -344,7 +368,7 @@ test("captures the raw request body without fastify-raw-body", async t => {
   });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(response.json(), { body: { hello: "world" } });
+  assert.deepEqual(response.json(), { body: { hello: "world" }, rawBody: null });
 });
 
 test("rejects a DELETE body that was not included in the signature", async t => {

@@ -64,8 +64,6 @@ app.post(
 app.addHook("preHandler", app.verifyAwsSigV4);
 ```
 
-The plugin captures received bytes (raw body) for SigV4-authorized requests before Fastify parses the body. It is compatible with `fastify-raw-body`: if the application already uses it, its `request.rawBody` behavior is unchanged.
-
 ### Call a protected route with `fetch()`
 
 Sign the request before sending it. [`aws4fetch`](https://github.com/mhart/aws4fetch) by the same author as `aws4`, creates a standard signed `Request`; the network call below is the native `fetch()`:
@@ -114,6 +112,7 @@ Configure CORS to allow `Authorization`, `Content-Type`, `X-Amz-Date` and `X-Amz
 | `getCredentials(accessKeyId, request)` | Yes | Returns credentials for an enabled access key, or `null` when unknown. It may be async. |
 | `maxClockSkewMs` | No | Allowed clock difference from `X-Amz-Date`; defaults to a minute. |
 | `unauthorizedResponseBody` | No | What should we `reply.send()` in case we are serving a `401` response. Default: `{ message: "Unauthorized" }` |
+| `skipCaptureRawBody` | No | See **Body signing considerations** below |
 
 Temporary AWS credentials are deliberately not supported.
 
@@ -128,11 +127,26 @@ Protected requests must use `AWS4-HMAC-SHA256` and include:
 - `Authorization` with a SigV4 credential, signed-header list, and signature
 - `Host` in the signed-header list
 - `X-Amz-Date` matching the credential date scope
-- Optional `X-Amz-Content-Sha256` containing the hexadecimal SHA-256 hash of the request body. If omitted, the payload is still covered by the recomputed signature.
+
+With `skipCaptureRawBody: true`, also:
+
+- `X-Amz-Content-Sha256` containing the hexadecimal SHA-256 hash of the request body (see also **Body signing considerations** below)
 
 The plugin responds with `401 { "message": "Unauthorized" }` for invalid signatures, unknown keys, invalid payload hashes, malformed headers, and timestamps outside the configured skew. Credential-lookup failures produce `500` and are logged.
 
 `UNSIGNED-PAYLOAD` intentionally rejected. AWS streaming payload signatures (`STREAMING-AWS4-HMAC-SHA256-*`) are not supported.
+
+## Body signing considerations
+
+By default (`skipCaptureRawBody: false`) the raw request body is collected in memory in full and passed to `aws4.RequestSigner` for verification. This is a reasonable, "default" behavior. This way the body is captured twice: once for AWS verification, and once for parsing into `request.body` by Fastify.
+
+For the vast majority of cases this is perfectly fine. However on a high load webserver it might be beneficial to NOT capture the raw body twice and instead rely on a supplied body signature. In this case set `skipCaptureRawBody` to `true` and send requests with the `X-Amz-Content-Sha256` header populated. In this mode the plugin will NOT collect the request body, will NOT pass it to `aws` for verification and instead rely on checksum validation, which is 100% secure. The reason why this mode is not the default is that different software might sign the payload in a different ways and the safe default is to collect the body.
+
+This plugin calculates the SHA-256 payload checksum while Fastify reads the request stream.
+
+This plugin is compatible with `fastify-raw-body`.
+
+FIXME: should `X-Amz-Content-Sha256` be part of listed signed headers?
 
 ## Development
 

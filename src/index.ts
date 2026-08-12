@@ -26,6 +26,9 @@ export type AwsSigV4PluginOptions = {
   /** Response body to send when the request is unauthorized. */
   unauthorizedResponseBody?: any;
 
+  /** Do not capture raw request bytes for signature verification. Defaults to false. */
+  skipCaptureRawBody?: boolean;
+
   /** Provides the current time. For tests only. */
   now?: () => Date;
 };
@@ -54,7 +57,6 @@ type ParsedAuthorization = {
   signature: string;
 };
 
-type FastifyRequestWithRawBody = FastifyRequest & { rawBody?: unknown };
 type FastifyPayloadStream = Transform & { receivedEncodedLength: number };
 
 const DEFAULT_401_RESPONSE = { message: "Unauthorized" };
@@ -62,8 +64,10 @@ const DEFAULT_MAX_CLOCK_SKEW_MS = 1 * 60 * 1000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
 const AMZ_HMAC_PATTERN = /^AWS4-HMAC-SHA256\s+(.+)$/i;
+const DEFAULT_SKIP_CAPTURE_RAW_BODY = false;
 
-const capturedRawBodies = new WeakMap<FastifyRequest, Buffer>();
+const capturedRawBodies = new WeakMap<FastifyRequest, Promise<Buffer>>();
+const capturedPayloadHashes = new WeakMap<FastifyRequest, Promise<string>>();
 
 function sendUnauthorized(request: FastifyRequest, reply: FastifyReply, reason: string, unauthorizedResponseBody: any) {
   request.log.debug({ reason }, "AWS SigV4 authentication failed");
@@ -155,23 +159,22 @@ function safeEqual(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function verifyPayloadHash(rawBody: Buffer, suppliedHash: string | undefined): boolean {
-  if (suppliedHash === undefined) return true;
-  if (!suppliedHash || !SHA256_HEX_PATTERN.test(suppliedHash)) return false;
-
-  const actualHash = crypto.createHash("sha256").update(rawBody).digest("hex");
-  return safeEqual(actualHash, suppliedHash);
-}
-
-function shouldCaptureRawBody(request: FastifyRequest): boolean {
+function hasSigV4Authorization(request: FastifyRequest): boolean {
   const authorization = getHeader(request, "authorization");
   return Boolean(parseAuthorization(authorization));
 }
 
-function captureRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream): FastifyPayloadStream {
+function captureHashAndPossiblyRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream, skipCaptureBody: boolean): FastifyPayloadStream {
   const chunks: Buffer[] = [];
   const bodyLimit = request.routeOptions.bodyLimit;
   let receivedLength = 0;
+  const hash = crypto.createHash("sha256");
+
+  const promiseWithResolversForRawBody = Promise.withResolvers<Buffer>();
+  if (!skipCaptureBody) capturedRawBodies.set(request, promiseWithResolversForRawBody.promise);
+
+  const promiseWithResolversForHash = Promise.withResolvers<string>();
+  capturedPayloadHashes.set(request, promiseWithResolversForHash.promise);
 
   const capturedPayload = new Transform({
     transform(chunk, encoding, callback) {
@@ -180,12 +183,18 @@ function captureRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream)
       receivedLength += buffer.length;
       (this as FastifyPayloadStream).receivedEncodedLength += buffer.length;
 
-      if (receivedLength <= bodyLimit) chunks.push(buffer);
+      if (!skipCaptureBody && receivedLength <= bodyLimit) chunks.push(buffer);
+
+      hash.update(buffer);
+
       callback(null, chunk);
     },
 
     flush(callback) {
-      if (receivedLength <= bodyLimit) capturedRawBodies.set(request, Buffer.concat(chunks));
+      if (receivedLength <= bodyLimit) {
+        if (!skipCaptureBody) promiseWithResolversForRawBody.resolve(Buffer.concat(chunks));
+        promiseWithResolversForHash.resolve(hash.digest("hex"));
+      }
       callback();
     }
   }) as FastifyPayloadStream;
@@ -197,24 +206,15 @@ function captureRawBody(request: FastifyRequest, payload: NodeJS.ReadableStream)
   return capturedPayload;
 }
 
-function getRawBody(request: FastifyRequest): Buffer | undefined {
-  const capturedRawBody = capturedRawBodies.get(request);
-  if (capturedRawBody !== undefined) return capturedRawBody;
-
-  const configuredRawBody = (request as FastifyRequestWithRawBody).rawBody;
-  return Buffer.isBuffer(configuredRawBody) ? configuredRawBody : undefined;
-}
-
 function createVerifier(options: AwsSigV4PluginOptions) {
   const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
   const now = options.now ?? (() => new Date());
   const unauthorizedResponseBody = options.unauthorizedResponseBody ?? DEFAULT_401_RESPONSE;
+  const skipCaptureRawBody = options.skipCaptureRawBody ?? DEFAULT_SKIP_CAPTURE_RAW_BODY;
 
   if (!Number.isFinite(maxClockSkewMs) || maxClockSkewMs < 0) throw new Error("maxClockSkewMs must be a non-negative finite number");
 
   return async function verifyAwsSigV4(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const rawBody = getRawBody(request);
-
     const authorization = getHeader(request, "authorization");
     if (!authorization) return sendUnauthorized(request, reply, "Authorization header is missing", unauthorizedResponseBody);
 
@@ -234,9 +234,21 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       return sendUnauthorized(request, reply, "Required headers are not signed", unauthorizedResponseBody);
     }
 
-    if (rawBody) {
-      const payloadHash = getHeader(request, "x-amz-content-sha256");
-      if (!verifyPayloadHash(rawBody, payloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
+    const actualPayloadHashPromise = capturedPayloadHashes.get(request);
+    if (!actualPayloadHashPromise) throw new Error("Payload hash was not captured.");
+    const actualPayloadHash = await actualPayloadHashPromise;
+
+    const suppliedPayloadHash = getHeader(request, "x-amz-content-sha256");
+
+    if (suppliedPayloadHash) {
+      // We have two hashes, so let's compare them
+      if (!safeEqual(actualPayloadHash, suppliedPayloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
+
+      // hashes do match, all good
+
+    // We do not have supplied hash AND we did not capture the body, so we cannot verify the hash
+    } else if (skipCaptureRawBody) {
+      return sendUnauthorized(request, reply, "Payload hash is missing and skipCaptureRawBody=true", unauthorizedResponseBody);
     }
 
     const host = getHeader(request, "host");
@@ -267,6 +279,13 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     // sessionToken tmp disabled
     if ("sessionToken" in credentials) return sendUnauthorized(request, reply, "Temporary credentials are not supported", unauthorizedResponseBody);
 
+    let rawBody: Buffer | undefined;
+    if (!skipCaptureRawBody) {
+      const rawBodyPromise = capturedRawBodies.get(request);
+      if (!rawBodyPromise) throw new Error("Raw body was not captured.");
+      rawBody = await rawBodyPromise;
+    }
+
     const signOptions: aws4.Request = {
       host,
       method: request.method,
@@ -279,6 +298,10 @@ function createVerifier(options: AwsSigV4PluginOptions) {
       region: options.region,
       service: options.service
     };
+
+    // Explicit memory release
+    capturedRawBodies.delete(request);
+    capturedPayloadHashes.delete(request);
 
     const signer = new aws4.RequestSigner(signOptions, {
       accessKeyId: credentials.accessKeyId,
@@ -306,8 +329,9 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 
 const fastifyAwsSigV4: FastifyPluginAsync<AwsSigV4PluginOptions> = async (fastify, options) => {
   fastify.addHook("preParsing", (request, reply, payload, done) => {
-    if (!shouldCaptureRawBody(request)) return done(null, payload);
-    done(null, captureRawBody(request, payload));
+    if (!hasSigV4Authorization(request)) return done(null, payload);
+
+    done(null, captureHashAndPossiblyRawBody(request, payload, options.skipCaptureRawBody ?? DEFAULT_SKIP_CAPTURE_RAW_BODY));
   });
 
   fastify.decorateRequest("accessKeyId", null);
