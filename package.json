@@ -1,7 +1,7 @@
 {
   "name": "fastify-aws-sig4-auth",
   "version": "0.0.1",
-  "description": "Protect fastify routes using AWS Signature V4",
+  "description": "Protect Fastify routes with AWS Signature V4",
   "keywords": [
     "fastify",
     "aws",
