@@ -62,6 +62,18 @@ app.post(
 
 // Example 2, handle all routes:
 app.addHook("preHandler", app.verifyAwsSigV4);
+
+app.post(
+  "/private",
+
+  async request => {
+    console.log(`Successfully authenticated with ${request.accessKeyId}`);
+
+    return {
+      ok: true
+    };
+  }
+);
 ```
 
 ### Call a protected route with `fetch()`
