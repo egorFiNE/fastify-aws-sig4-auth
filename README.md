@@ -76,6 +76,18 @@ app.post(
 );
 ```
 
+### Example
+
+See `example/`. Or you can start right away:
+
+```sh
+cd example
+npm install
+node index.ts
+```
+
+And start sending signed POST and GET requests to `http://localhost:3000/protected`.
+
 ### Call a protected route with `fetch()`
 
 Sign the request before sending it. [`aws4fetch`](https://github.com/mhart/aws4fetch) by the same author as `aws4`, creates a standard signed `Request`; the network call below is the native `fetch()`:
@@ -154,11 +166,11 @@ By default (`skipCaptureRawBody: false`) the raw request body is collected in me
 
 For the vast majority of cases this is perfectly fine. However on a high load webserver it might be beneficial to NOT capture the raw body twice and instead rely on a supplied body signature. In this case set `skipCaptureRawBody` to `true` and send requests with the `X-Amz-Content-Sha256` header populated. In this mode the plugin will NOT collect the request body, will NOT pass it to `aws` for verification and instead rely on checksum validation, which is 100% secure. The reason why this mode is not the default is that different software might sign the payload in a different ways and the safe default is to collect the body.
 
+In order to check whether your client sends requests with checksum, use the example in `example/` and try to send requests to the sample server to see whether they succeed.
+
 This plugin calculates the SHA-256 payload checksum while Fastify reads the request stream.
 
 This plugin is compatible with `fastify-raw-body`.
-
-FIXME: should `X-Amz-Content-Sha256` be part of listed signed headers?
 
 ## Development
 
