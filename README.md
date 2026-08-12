@@ -61,7 +61,7 @@ app.post(
 );
 
 // Example 2, handle all routes:
-app.addHook("preHandler", app.verifyAwsSigV4);
+app.addHook("preHandler", (request, reply) => app.verifyAwsSigV4(request, reply));
 
 app.post(
   "/private",

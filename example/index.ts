@@ -31,7 +31,10 @@ await fastify.register(fastifyAwsSigV4, {
   },
 });
 
-fastify.addHook("preHandler", fastify.verifyAwsSigV4);
+fastify.addHook("preHandler", (request, reply) => fastify.verifyAwsSigV4(request, reply));
+
+// This form should work as well, but in some cases it doesn't. In particular, in autohooks.ts with autoload. So try.
+// fastify.addHook("preHandler", fastify.verifyAwsSigV4);
 
 fastify.post(
   "/protected",
