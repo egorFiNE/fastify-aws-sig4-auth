@@ -162,6 +162,25 @@ test("sets request.accessKeyId after successful signature verification", async t
   assert.deepEqual(response.json(), { accessKeyId: credentials.accessKeyId });
 });
 
+test("accepts a signed GET when raw body capture is disabled", async t => {
+  const app = await createApp({ skipCaptureRawBody: true });
+  t.after(() => app.close());
+
+  app.get("/identity", { preValidation: app.verifyAwsSigV4 }, async request => ({
+    accessKeyId: request.accessKeyId,
+  }));
+
+  const request = signedRequest("", {}, false, "example.test", "GET", "/identity");
+  const response = await app.inject({
+    method: "GET",
+    url: request.url,
+    headers: request.headers,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { accessKeyId: credentials.accessKeyId });
+});
+
 test("accepts a signed request with a body sent through fetch over HTTP", async t => {
   const app = await createApp();
   t.after(() => app.close());

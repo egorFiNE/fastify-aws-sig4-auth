@@ -62,6 +62,7 @@ type FastifyPayloadStream = Transform & { receivedEncodedLength: number };
 const DEFAULT_401_RESPONSE = { message: "Unauthorized" };
 const DEFAULT_MAX_CLOCK_SKEW_MS = 1 * 60 * 1000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
+const EMPTY_PAYLOAD_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
 const AMZ_HMAC_PATTERN = /^AWS4-HMAC-SHA256\s+(.+)$/i;
 const DEFAULT_SKIP_CAPTURE_RAW_BODY = false;
@@ -232,8 +233,7 @@ function createVerifier(options: AwsSigV4PluginOptions) {
 
     if (
       !parsed.signedHeaderNames.includes("host") ||
-      !parsed.signedHeaderNames.includes("x-amz-date") ||
-      (skipCaptureRawBody && !parsed.signedHeaderNames.includes("x-amz-content-sha256"))
+      !parsed.signedHeaderNames.includes("x-amz-date")
     ) {
       return sendUnauthorized(request, reply, "Required headers are not signed", unauthorizedResponseBody);
     }
@@ -245,13 +245,17 @@ function createVerifier(options: AwsSigV4PluginOptions) {
     const suppliedPayloadHash = getHeader(request, "x-amz-content-sha256");
 
     if (suppliedPayloadHash) {
+      if (skipCaptureRawBody && !parsed.signedHeaderNames.includes("x-amz-content-sha256")) {
+        return sendUnauthorized(request, reply, "Required headers are not signed", unauthorizedResponseBody);
+      }
+
       // We have two hashes, so let's compare them
       if (!safeEqual(actualPayloadHash, suppliedPayloadHash)) return sendUnauthorized(request, reply, "Payload hash does not match", unauthorizedResponseBody);
 
       // hashes do match, all good
 
-    // We do not have supplied hash AND we did not capture the body, so we cannot verify the hash
-    } else if (skipCaptureRawBody) {
+    // Without raw bytes, aws4 can only reconstruct an unsigned empty payload.
+    } else if (skipCaptureRawBody && actualPayloadHash !== EMPTY_PAYLOAD_SHA256) {
       return sendUnauthorized(request, reply, "Payload hash is missing and skipCaptureRawBody=true", unauthorizedResponseBody);
     }
 
