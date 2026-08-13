@@ -103,7 +103,7 @@ const body = JSON.stringify({ hello: "world" });
 
 const client = new AwsClient({
   accessKeyId: "AKIDEXAMPLE",
-  secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+  secretAccessKey: "wJalrXUtnFEMIK7MDENG+bPxRfiCYEXAMPLEKEY",
   // Must match the plugin configuration:
   region: "ukraine-kiev",
   service: "my-service"
@@ -171,6 +171,26 @@ In order to check whether your client sends requests with checksum, use the exam
 This plugin calculates the SHA-256 payload checksum while Fastify reads the request stream.
 
 This plugin is compatible with `fastify-raw-body`.
+
+## Troubleshooting
+
+Make sure that you node.js app receives all headers. In nginx, it is particularly important to add this to `proxy_pass`:
+
+```
+proxy_set_header Host $http_host;
+```
+
+Do not have `/` in the access key id or secret access key. It breaks the signing.
+
+Enable debug log in Fastify to see the diagnostics from this module:
+
+```js
+const fastify = Fastify({
+  logger: {
+    level: 'debug'
+  }
+});
+```
 
 ## Development
 
