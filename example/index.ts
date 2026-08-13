@@ -6,7 +6,12 @@ const SECRET_ACCESS_KEY = "world";
 const REGION = "ukraine-kiev";
 const SERVICE = "my-service";
 
-const fastify = Fastify();
+const fastify = Fastify({
+  // Do you want diagnostics logging?
+  // logger: {
+  //   level: 'debug'
+  // }
+});
 
 fastify.get('/', async function handler (request, reply) {
   return "Send signed POST or GET to /protected";
